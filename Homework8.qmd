@@ -1,0 +1,520 @@
+---
+title: "Homework8: Basic Modeling Practice"
+format: html
+editor: visual
+toc: true
+---
+#Load libraries
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidyr)
+library(readr)
+library(psych)
+library(ggplot2)
+library(dplyr)
+library(knitr)
+library(skimr)
+library(purrr)
+library(janitor)
+library(dplyr)
+library(stringr)
+library(reshape2)
+library(lubridate)
+library(tidymodels)
+
+```
+
+#Read the dataset
+```{r}
+# 1.1 Use readr's encoding to detect on the raw file
+raw_bytes <- read_file_raw("https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv")
+guess_encoding(raw_bytes)
+
+# 1.2 Read the dataset
+Bike_data <- read_csv(
+  "https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv",
+  locale = locale(encoding = "ISO-8859-1")
+)
+Bike_data
+```
+# EDA : Checking the data
+```{r}
+# 2 Check for missingness
+
+Bike_data |>
+  summarise(across(everything(), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(),
+               names_to = "Variable",
+               values_to = "missing_count") %>%
+  arrange(desc(missing_count))
+ 
+```
+ 
+```{r}
+# 2.1 Check the column types and the values within the columns
+str(Bike_data)
+```
+
+we have 8,760 rows of data and 14 columns. of the 14 variables,4 are character including date variable which needs to be changed to date type later.
+```{r}
+# 2.2 basic summary statistics for the numeric variables
+# Select only numeric columns
+numeric_data <- Bike_data |>
+  select(where(is.numeric))
+ 
+psych::describe(numeric_data)
+
+
+```
+We used describe function from psych package to came up with the summary table for the numeric variables. we have 10 numeric variables and according to the data, the average bike rental count computed across all hours and dates were 704.6.
+```{r}
+# 2.3 check the unique values for the categorical variables
+unique_cats <- Bike_data |>
+  select(where(~ (is.character(.) | is.factor(.)))) |>     # only categorical
+  select(-matches("Date", ignore.case = TRUE)) |>          # drop date column 
+  map(unique)
+ unique_cats
+
+```
+we have three categorical variables with the above unique values.
+
+```{r}
+# 3. change character date to date format
+
+Bike_data$Date <- dmy(Bike_data$Date)
+
+```
+
+
+
+```{r}
+# 4.turn Seasons, Holiday, and Functioning Day to factor
+ 
+Bike_data <- Bike_data %>%
+  mutate(Seasons = as.factor(Seasons))%>%
+  mutate(Holiday = as.factor(Holiday)) %>%
+  mutate(`Functioning Day` = as.factor(`Functioning Day`))
+Bike_data
+```
+
+```{r}
+# 5. give a cleaner variable names, strip the units from the variables that have units at the end to make it easy to use.
+Bike_data <- Bike_data %>%
+  clean_names(case = "snake")%>%
+  rename_with(~ str_remove_all(., "_?(c|%|m_s|mj_m2|10m|cm|mm|min|m|percent)$"))
+Bike_data
+
+```
+
+
+
+```{r}
+# 6.Create summary statistics (especially related to the bike rental counts)
+#do counts across your categorical variables
+ Bike_data|>
+  summarise(
+    n = n(),
+    mean = mean(rented_bike_count, na.rm = TRUE),
+    median = median(rented_bike_count, na.rm = TRUE),
+    sd = sd(rented_bike_count, na.rm = TRUE),
+    min = min(rented_bike_count, na.rm = TRUE),
+    max = max(rented_bike_count, na.rm = TRUE),
+  )
+
+ 
+summary(Bike_data$rented_bike_count)
+
+hist(Bike_data$rented_bike_count)
+```
+created summary statistics related to bike rental count across categorical variables.
+```{r}
+
+# Bike rental by Season
+season_summary <- Bike_data |>
+  group_by(seasons) |>
+  summarise(
+    mean_count = mean(rented_bike_count, na.rm = TRUE),
+    median_count = median(rented_bike_count, na.rm = TRUE),
+    sd_count = sd(rented_bike_count, na.rm = TRUE),
+    n = n()
+  )
+season_summary
+
+# Bike rental by Holiday
+holiday_summary <- Bike_data |>
+  group_by(holiday) |>
+  summarise(
+    mean_count = mean(rented_bike_count, na.rm = TRUE),
+    median_count = median(rented_bike_count, na.rm = TRUE),
+    sd_count = sd(rented_bike_count, na.rm = TRUE),
+    n = n()
+  )
+holiday_summary
+
+# Bike rental by functioning day
+func_summary <- Bike_data |>
+  group_by(functioning_day) |>
+  summarise(
+    mean_count = mean(rented_bike_count, na.rm = TRUE),
+    median_count = median(rented_bike_count, na.rm = TRUE),
+    sd_count = sd(rented_bike_count, na.rm = TRUE),
+    n = n()
+  )
+func_summary
+
+```
+Based on the summary output, we can see that the average number of bike rental was the highest during summer season.Also, it indicates that bike rental is generally higher on regular days compared to holidays. we should note that the bike rental count is 0 where the functioning_day is "No" which means the stations were closed on non-functioning days, thus it makes sense to subset the data to ONLY functioning days before further analysis.
+
+
+```{r}
+#sub-setting the data for functioning_day == "Yes" 
+
+Bike_data2 <- Bike_data|>filter(functioning_day == "Yes")
+Bike_data2
+
+```
+Once we filtered our data for only the functioning days, We summarized our data across hours so that each day has one observation. To do this, we  grouped our data by date,season and holiday variable and summarized across bike count, rainfall and snowfall to get the their total and summarized across weather related variables to get their mean value. 
+```{r}
+# 7.To simplify our analysis, we’ll summarize across the hours so that each day has one observation associated with it.
+sumry <- Bike_data2 %>%
+  group_by(date,seasons, holiday ) %>%
+  summarise(
+    across(c(rented_bike_count, rainfall, snowfall), ~ sum(.x, na.rm = TRUE), .names = "tot_{.col}") ,
+    across(c(temperature,humidity,wind_speed,visibility,dew_point_temperature,solar_radiation),
+           ~ mean(.x, na.rm = TRUE), .names = "mean_{.col}" ),
+ 
+)%>%
+  ungroup()
+sumry
+
+#Number of days
+nrow(sumry)
+
+#confirm no duplicates
+any(duplicated(sumry[, c("date", "seasons", "holiday")]))
+```
+ We can see that we have 353 distinct rows per day and no duplicates were found.
+
+once "sumry" is my clean, analysis-ready dataset,we recreated the basic summary stats.
+
+```{r}
+# 8. Recreate your basic summary stats and then create some plots to explore relationships. Report correlation between your numeric variables as well.
+# Bike rental by Season
+season_summaryNew <- sumry %>%
+  group_by(seasons) %>%
+  summarise(
+    mean_count = mean(tot_rented_bike_count, na.rm = TRUE),
+    median_count = median(tot_rented_bike_count, na.rm = TRUE),
+    sd_count = sd(tot_rented_bike_count, na.rm = TRUE),
+    n = n()
+  )
+season_summaryNew
+
+# Bike rental by Holiday
+holiday_summaryNew <- sumry %>%
+  group_by(holiday) %>%
+  summarise(
+    mean_count = mean(tot_rented_bike_count, na.rm = TRUE),
+    median_count = median(tot_rented_bike_count, na.rm = TRUE),
+    sd_count = sd(tot_rented_bike_count, na.rm = TRUE),
+    n = n()
+  )
+holiday_summaryNew
+
+
+#A quick visualization 
+
+ggplot(sumry, aes(x = seasons, y = tot_rented_bike_count, fill = seasons)) +
+  geom_boxplot() +
+  labs(title = "Total Bike Rental by Season (Functioning Days Only)",
+       x = "Season", y = "Total Rented Bike") +
+  theme_minimal()
+
+
+# Correlation between numeric variables
+num_vars <- sumry |>
+  ungroup()|>
+  select(where(is.numeric))
+ str(num_vars)
+
+# Compute correlation matrix
+cor_matrix <- round(cor(num_vars, use = "pairwise.complete.obs"), 2)
+
+# Melt for ggplot
+cor_long <- melt(cor_matrix)
+
+# Plot heatmap (0 to 1 scale)
+ggplot(cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3) +
+  scale_fill_gradientn(
+    colours = c("white", "yellow", "orange", "red", "darkred"),
+    limits  = c(-0, 1),
+    name    = "Correlation"
+  ) +
+  labs(title = "Heatmap of Positive Correlations (0–1)",
+       x = NULL, y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+From the box plot above, we can see clearly see that the total Bike rented is highest during summer and lowest during winter. It is good to note that, mean temperature has strong positive correlation with bike rental activity with r=0.75 suggesting higher temperature correspond to higher bike rental. you can see similar relation with variable  dew point temperature and solar radiation as both accompany high temperature. 
+
+# Split the Data
+Now we are ready to split our data into training and test
+```{r}
+# Fix the random numbers by setting the seed 
+# This enables the analysis to be reproducible 
+set.seed(1216)
+# Put 3/4 of the data into the training set 
+Bike_split <- initial_split(sumry, prop = 3/4, strata = seasons)
+ 
+# Create data frames for the two sets:
+train_bike <- training(Bike_split)
+
+test_bike  <- testing(Bike_split)
+```
+we have 90 observation in the test dataset and 263 in the training dataset.
+
+we performed ten-fold cross validation on the training dataset.We kept the stratification so that each fold maintain the same seasonal distribution as the full dataset.
+```{r}
+set.seed(1216)
+
+trainCV <- vfold_cv(
+  train_bike,
+  v = 10,          # number of folds
+  strata = seasons # keep stratification consistent
+)
+trainCV
+
+```
+# Fitting MLR Models
+Below, we created a recipe using the training dataset,indicating,tot_rented_bike_count as a response variable and all the rest as predictor variables excluding date.
+
+## First recipe
+In the first recipe, we created, a new factor variable representing weekday vs weekend then the date and the intermediate variable creating this factor variable was removed, numeric variables were standardized (Center and scale). Dummy variables were also generated for the seasons, holiday and the newly created factor variable. data was then prepared with prep() and the transformations were applied using bake() prior to modeling.
+
+
+```{r}
+#1st recipes
+
+  # 1) Use Date to get day-of-week, but drop the original Date from predictors
+  #    This will create a column like "Date_dow"
+bike_rec_1 <- recipe(tot_rented_bike_count ~ ., data = train_bike) %>%
+  recipes::step_date(date,features = "dow", keep_original_cols = FALSE ) %>%
+  
+  # 2) Create weekday/weekend factor from the day-of-week variable
+  #    (Date_dow is an ordered factor from Sun, Mon, ..., Sat)
+  step_mutate(
+    day_type = factor(if_else(
+      date_dow %in% c("Sat", "Sun"),
+      "weekend",
+      "weekday"
+    ))
+   
+  ) %>%
+  
+  # 3) Remove the intermediate day-of-week,created by step_date().  
+  step_rm(date_dow) %>%
+  
+  # 4) Standardize (center & scale) all numeric predictors
+  step_normalize(all_numeric_predictors()) %>%
+  
+  # 5) Create dummy variables for all nominal predictors (Seasons, Holiday, day_type, etc.)
+  step_dummy(all_nominal_predictors())
+bike_rec_1
+
+
+bike_prep_1 <- prep(bike_rec_1)
+baked_train <- bake(bike_prep_1, new_data = NULL)
+
+glimpse(baked_train)
+
+```
+
+## Second recipe
+For the second recipe we did the same thing as the first recipe, in addition, interaction terms were created between selected variables to allow the model to capture combined effects. The recipe was prepared using prep() and applied to the dataset using bake() prior to modeling."
+
+```{r}
+#2nd recipes
+
+  # 1) Use Date to get day-of-week, but drop the original Date from predictors
+  #    This will create a column like "Date_dow"
+bike_rec_2 <- recipe(tot_rented_bike_count ~ ., data = train_bike) %>%
+  recipes::step_date(date,features = "dow", keep_original_cols = FALSE ) %>%
+  
+  # 2) Create weekday/weekend factor from the day-of-week variable
+  #    (Date_dow is an ordered factor from Sun, Mon, ..., Sat)
+  step_mutate(
+    day_type = factor(if_else(
+      date_dow %in% c("Sat", "Sun"),
+      "weekend",
+      "weekday"
+    ))
+   
+  ) %>%
+  
+  # 3) Remove the intermediate day-of-week variable created by step_date()
+  step_rm(date_dow) %>%
+  
+   # 5) Create dummy variables for all nominal predictors (Seasons, Holiday, day_type, etc.)
+  step_dummy(all_nominal_predictors(),keep_original_cols = FALSE)%>%
+
+  # Add interaction terms:
+  # 1. seasons * holiday
+  # 2. seasons * temp
+  # 3. temp * rainfall
+ step_interact(
+    # Use selector functions directly with the colon operator, no parentheses
+    terms = ~ starts_with("seasons_"):holiday_No.Holiday +
+              ~ starts_with("seasons_"):mean_temperature +
+              mean_temperature:tot_rainfall
+  ) %>%
+
+ # 4) Standardize (center & scale) all numeric predictors
+  step_normalize(all_numeric_predictors()) 
+  
+
+  
+
+bike_rec_2
+
+
+bike_prep_2 <- prep(bike_rec_2)
+baked_train2 <- bake(bike_prep_2, new_data = NULL)
+
+glimpse(baked_train2)
+```
+## Third recipe
+
+For the third recipe, in addition to the second recipe, quadratic terms were created for numeric predictors to capture potential nonlinear relationships. The recipe was prepared using prep() and applied to the dataset using bake() prior to modeling."
+
+```{r}
+#3rd recipes
+
+  # 1) Use Date to get day-of-week, but drop the original Date from predictors
+  #    This will create a column like "Date_dow"
+bike_rec_3 <- recipe(tot_rented_bike_count ~ ., data = train_bike) %>%
+  recipes::step_date(date,features = "dow", keep_original_cols = FALSE ) %>%
+  
+  # 2) Create weekday/weekend factor from the day-of-week variable
+  #    (Date_dow is an ordered factor from Sun, Mon, ..., Sat)
+  step_mutate(
+    day_type = factor(if_else(
+      date_dow %in% c("Sat", "Sun"),
+      "weekend",
+      "weekday"
+    ))
+   
+  ) %>%
+  
+  # 3) Remove the intermediate day-of-week variable created by step_date()
+  step_rm(date_dow) %>%
+  
+   # 5) Create dummy variables for all nominal predictors (Seasons, Holiday, day_type, etc.)
+  step_dummy(all_nominal_predictors(),keep_original_cols = FALSE, one_hot = FALSE)%>% # avoid full-rank dummy issue
+  
+ 
+  # Add interaction terms:
+  # 1. seasons * holiday
+  # 2. seasons * temp
+  # 3. temp * rainfall
+ step_interact(
+    # Use selector functions directly with the colon operator, no parentheses
+    terms = ~ starts_with("seasons_"):holiday_No.Holiday +
+               ~ starts_with("seasons_"):mean_temperature +
+              mean_temperature:tot_rainfall
+  ) %>%
+  
+  # 4. add quadratic terms for all numeric predictors
+  step_poly(all_numeric_predictors()& 
+              !starts_with("seasons") & 
+              !starts_with("holiday") &
+              !starts_with("day_type"), degree = 2, options = list(raw = TRUE)) %>%
+  
+
+ # 4) Standardize (center & scale) all numeric predictors
+  step_normalize(all_numeric_predictors()) 
+  
+
+  
+
+bike_rec_3
+
+
+bike_prep_3 <- prep(bike_rec_3)
+baked_train3 <- bake(bike_prep_3, new_data = NULL)
+
+glimpse(baked_train3)
+```
+
+## Set up LM
+
+Here, we set up the linear model with linear_reg and 'lm' engine which fits the model by finding the line that best fits the data by minimzing squared errors.
+```{r}
+bike_lm <- linear_reg() %>%
+  set_engine("lm",rankdeficient = "NA") %>%
+  set_mode("regression")
+```
+workflow to integrate the pre-processing recipe with the linear regression model.
+
+```{r}
+bike_wf1 <- workflow() %>%
+  add_recipe(bike_rec_1) %>%
+  add_model(bike_lm)  
+
+bike_wf2 <- workflow() %>%
+  add_recipe(bike_rec_2) %>%
+  add_model(bike_lm)  
+
+
+bike_wf3 <- workflow() %>%
+  add_recipe(bike_rec_3) %>%
+  add_model(bike_lm)   
+
+```
+
+
+To select the best model, each of the workflow was trained and evaluated using 10-fold cross-validation. The fit_resamples() function was applied  to each fold, and the resulting training set cross-validated errors were compared to identify the workflow with the lowest RMSE.
+```{r warning=FALSE,message=FALSE}
+res1 <- fit_resamples(bike_wf1, resamples = trainCV, metrics = metric_set(rmse, rsq),
+                      control = control_resamples(save_pred = TRUE))
+res2 <- fit_resamples(bike_wf2, resamples = trainCV, metrics = metric_set(rmse, rsq),
+                      control = control_resamples(save_pred = TRUE))
+res3 <- fit_resamples(bike_wf3, resamples = trainCV, metrics = metric_set(rmse, rsq),
+                      control = control_resamples(save_pred = TRUE))
+collect_metrics(res1)
+collect_metrics(res2)
+collect_metrics(res3)
+```
+combined all the metrices, added a column model and filtered it by rmse. Recipe 3 has the lowest RSME hence the best model.
+```{r}
+bind_rows(
+  collect_metrics(res1) %>% mutate(model = "recipe1"),
+  collect_metrics(res2) %>% mutate(model = "recipe2"),
+  collect_metrics(res3) %>% mutate(model = "recipe3")
+) %>%
+  filter(.metric == "rmse") %>%  # compare based on RMSE
+  arrange(mean)
+```
+we then fit the best model to the entire training dataset and computed RMSE
+
+```{r warning=FALSE,message=FALSE}
+best_wf <- bike_wf3
+
+final_fit <- last_fit(best_wf, split = Bike_split, metrics = metric_set(rmse))
+collect_metrics(final_fit)
+
+
+
+```
+Finally, we Obtained  coefficient table using extract_fit_parsnip()and tidy().
+
+```{r}
+final_model <- extract_fit_parsnip(final_fit)
+tidy(final_model)
+
+```
+
+From the final model we can interpret the coefficient for seasons_Spring as bike rental in spring is predicted to be ~3923 fewer than autumn, our reference season.Summer is predicted to have ~13373 more bike rental compared to autumn. Weekends are predicted to have 927 fewer bike rentals than week days which is our reference group.
+
+
